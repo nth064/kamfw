@@ -91,24 +91,9 @@ singbox_tun() {
 
 }
 
-singbox_default_interface() {
-    ip route show table all 2>/dev/null |
-        awk '
-            /^default / && / dev / && $0 !~ / table (dummy0|local|main) / && $0 !~ / dev (dummy0|tun[0-9]*|utun|lo) / {
-                for (i = 1; i <= NF; i++) {
-                    if ($i == "dev") {
-                        print $(i + 1)
-                        exit
-                    }
-                }
-            }
-        '
-}
-
 singbox_prepare_route_config() {
     _singbox_route_config="$1"
     [ -f "$_singbox_route_config" ] || return 0
-    _iface=$(singbox_default_interface)
 
     _tmp="${_singbox_route_config}.route.new"
     awk '
@@ -128,21 +113,20 @@ singbox_prepare_route_config() {
         { print }
     ' "$_singbox_route_config" >"$_tmp" && mv -f "$_tmp" "$_singbox_route_config" || rm -f "$_tmp"
 
-    if [ -n "$_iface" ]; then
-        _jq="${MODDIR}/bin/jq"
-        if [ ! -x "$_jq" ]; then
-            _jq="$(command -v jq 2>/dev/null || true)"
-        fi
-        if [ -n "$_jq" ]; then
-            _tmp="${_singbox_route_config}.direct-iface.new"
-            "$_jq" --arg iface "$_iface" '
-                .outbounds = ((.outbounds // []) | map(
-                    if (.type // "") == "direct" then .bind_interface = $iface else . end
-                ))
-            ' "$_singbox_route_config" >"$_tmp" && mv -f "$_tmp" "$_singbox_route_config" || rm -f "$_tmp"
-        fi
+    _jq="${MODDIR}/bin/jq"
+    if [ ! -x "$_jq" ]; then
+        _jq="$(command -v jq 2>/dev/null || true)"
     fi
-    unset _singbox_route_config _iface _jq _tmp
+    if [ -n "$_jq" ]; then
+        _tmp="${_singbox_route_config}.direct-route.new"
+        "$_jq" '
+            .outbounds = ((.outbounds // []) | map(
+                if (.type // "") == "direct" then del(.bind_interface) else . end
+            ))
+        ' "$_singbox_route_config" >"$_tmp" && mv -f "$_tmp" "$_singbox_route_config" || rm -f "$_tmp"
+    fi
+
+    unset _singbox_route_config _jq _tmp
 }
 
 singbox_start() {
