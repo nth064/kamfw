@@ -95,37 +95,64 @@ singbox_prepare_route_config() {
     _singbox_route_config="$1"
     [ -f "$_singbox_route_config" ] || return 0
 
-    _tmp="${_singbox_route_config}.route.new"
-    awk '
-        BEGIN {
-            in_route = 0
-        }
-        /^[[:space:]]*"route"[[:space:]]*:/ {
-            in_route = 1
-        }
-        in_route && /^[[:space:]]*"default_interface"[[:space:]]*:/ {
-            next
-        }
-        in_route && /^[[:space:]]*"auto_detect_interface"[[:space:]]*:/ {
-            print "    \"auto_detect_interface\": false,"
-            next
-        }
-        { print }
-    ' "$_singbox_route_config" >"$_tmp" && mv -f "$_tmp" "$_singbox_route_config" || rm -f "$_tmp"
-
     _jq="${MODDIR}/bin/jq"
     if [ ! -x "$_jq" ]; then
         _jq="$(command -v jq 2>/dev/null || true)"
     fi
     if [ -n "$_jq" ]; then
-        _tmp="${_singbox_route_config}.direct-route.new"
-        "$_jq" '
-            .outbounds = ((.outbounds // []) | map(
-                if (.type // "") == "direct" then del(.bind_interface) else . end
+        _tmp="${_singbox_route_config}.route.new"
+        if "$_jq" '
+            .route = ((.route // {})
+                | .auto_detect_interface = true
+                | del(.default_interface))
+            | .outbounds = ((.outbounds // []) | map(
+                if (.type // "") == "direct" then
+                    del(.bind_interface)
+                elif (.type // "") == "selector" then
+                    .interrupt_exist_connections = true
+                else
+                    .
+                end
             ))
-        ' "$_singbox_route_config" >"$_tmp" && mv -f "$_tmp" "$_singbox_route_config" || rm -f "$_tmp"
+        ' "$_singbox_route_config" >"$_tmp"; then
+            mv -f "$_tmp" "$_singbox_route_config"
+            unset _singbox_route_config _jq _tmp
+            return 0
+        fi
+        rm -f "$_tmp"
     fi
 
+    # Last-resort text fallback for minimal Android environments without jq.
+    # It never freezes routing to the currently active physical interface.
+    _tmp="${_singbox_route_config}.route.new"
+    awk '
+        function flush_previous() {
+            if (have_previous) {
+                print previous
+            }
+        }
+        {
+            current = $0
+            if (current ~ /^[[:space:]]*"auto_detect_interface"[[:space:]]*:/) {
+                sub(/:[[:space:]]*(true|false)/, ": true", current)
+            }
+            if (current ~ /^[[:space:]]*"interrupt_exist_connections"[[:space:]]*:/) {
+                sub(/:[[:space:]]*(true|false)/, ": true", current)
+            }
+            if (current ~ /^[[:space:]]*"(default_interface|bind_interface)"[[:space:]]*:/) {
+                if (current !~ /,[[:space:]]*$/ && have_previous) {
+                    sub(/,[[:space:]]*$/, "", previous)
+                }
+                next
+            }
+            flush_previous()
+            previous = current
+            have_previous = 1
+        }
+        END {
+            flush_previous()
+        }
+    ' "$_singbox_route_config" >"$_tmp" && mv -f "$_tmp" "$_singbox_route_config" || rm -f "$_tmp"
     unset _singbox_route_config _jq _tmp
 }
 
