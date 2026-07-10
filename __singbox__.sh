@@ -91,58 +91,69 @@ singbox_tun() {
 
 }
 
-singbox_default_interface() {
-    ip route show table all 2>/dev/null |
-        awk '
-            /^default / && / dev / && $0 !~ / table (dummy0|local|main) / && $0 !~ / dev (dummy0|tun[0-9]*|utun|lo) / {
-                for (i = 1; i <= NF; i++) {
-                    if ($i == "dev") {
-                        print $(i + 1)
-                        exit
-                    }
-                }
-            }
-        '
-}
-
 singbox_prepare_route_config() {
     _singbox_route_config="$1"
     [ -f "$_singbox_route_config" ] || return 0
-    _iface=$(singbox_default_interface)
 
+    _jq="${MODDIR}/bin/jq"
+    if [ ! -x "$_jq" ]; then
+        _jq="$(command -v jq 2>/dev/null || true)"
+    fi
+    if [ -n "$_jq" ]; then
+        _tmp="${_singbox_route_config}.route.new"
+        if "$_jq" '
+            .route = ((.route // {})
+                | .auto_detect_interface = true
+                | del(.default_interface))
+            | .outbounds = ((.outbounds // []) | map(
+                if (.type // "") == "direct" then
+                    del(.bind_interface)
+                elif (.type // "") == "selector" then
+                    .interrupt_exist_connections = true
+                else
+                    .
+                end
+            ))
+        ' "$_singbox_route_config" >"$_tmp"; then
+            mv -f "$_tmp" "$_singbox_route_config"
+            unset _singbox_route_config _jq _tmp
+            return 0
+        fi
+        rm -f "$_tmp"
+    fi
+
+    # Last-resort text fallback for minimal Android environments without jq.
+    # It never freezes routing to the currently active physical interface.
     _tmp="${_singbox_route_config}.route.new"
     awk '
-        BEGIN {
-            in_route = 0
+        function flush_previous() {
+            if (have_previous) {
+                print previous
+            }
         }
-        /^[[:space:]]*"route"[[:space:]]*:/ {
-            in_route = 1
+        {
+            current = $0
+            if (current ~ /^[[:space:]]*"auto_detect_interface"[[:space:]]*:/) {
+                sub(/:[[:space:]]*(true|false)/, ": true", current)
+            }
+            if (current ~ /^[[:space:]]*"interrupt_exist_connections"[[:space:]]*:/) {
+                sub(/:[[:space:]]*(true|false)/, ": true", current)
+            }
+            if (current ~ /^[[:space:]]*"(default_interface|bind_interface)"[[:space:]]*:/) {
+                if (current !~ /,[[:space:]]*$/ && have_previous) {
+                    sub(/,[[:space:]]*$/, "", previous)
+                }
+                next
+            }
+            flush_previous()
+            previous = current
+            have_previous = 1
         }
-        in_route && /^[[:space:]]*"default_interface"[[:space:]]*:/ {
-            next
+        END {
+            flush_previous()
         }
-        in_route && /^[[:space:]]*"auto_detect_interface"[[:space:]]*:/ {
-            print "    \"auto_detect_interface\": false,"
-            next
-        }
-        { print }
     ' "$_singbox_route_config" >"$_tmp" && mv -f "$_tmp" "$_singbox_route_config" || rm -f "$_tmp"
-
-    if [ -n "$_iface" ]; then
-        _jq="${MODDIR}/bin/jq"
-        if [ ! -x "$_jq" ]; then
-            _jq="$(command -v jq 2>/dev/null || true)"
-        fi
-        if [ -n "$_jq" ]; then
-            _tmp="${_singbox_route_config}.direct-iface.new"
-            "$_jq" --arg iface "$_iface" '
-                .outbounds = ((.outbounds // []) | map(
-                    if (.type // "") == "direct" then .bind_interface = $iface else . end
-                ))
-            ' "$_singbox_route_config" >"$_tmp" && mv -f "$_tmp" "$_singbox_route_config" || rm -f "$_tmp"
-        fi
-    fi
-    unset _singbox_route_config _iface _jq _tmp
+    unset _singbox_route_config _jq _tmp
 }
 
 singbox_start() {
