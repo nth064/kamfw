@@ -1,4 +1,4 @@
-﻿# shellcheck shell=ash
+# shellcheck shell=ash
 ##########################################################################################
 # KAM Framework - Internationalization (i18n) Module
 # Optimized for multi-line text and ash environment (2025 Revised)
