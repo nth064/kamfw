@@ -1,35 +1,52 @@
-# shellcheck shell=ash
+﻿# shellcheck shell=ash
 ##########################################################################################
 # KAM Framework - Internationalization (i18n) Module
 # Optimized for multi-line text and ash environment (2025 Revised)
 ##########################################################################################
-# 设置国际化文本
-# 用法: set_i18n "KEY" "zh" "文本内容" "en" "Text Content" ...
+# è®¾ç½®å›½é™…åŒ–æ–‡æœ¬
+# ç”¨æ³•: set_i18n "KEY" "zh" "æ–‡æœ¬å†…å®¹" "en" "Text Content" ...
 set_i18n() {
     _s_key="$1"
     shift
+    case "$_s_key" in
+    ""|*[!A-Za-z0-9_]*|[0-9]*) return 2 ;;
+    esac
+    [ $(( $# % 2 )) -eq 0 ] || return 2
+    _s_tmp=$(mktemp -d "${TMPDIR:-/tmp}/kam-i18n.XXXXXX") || return 1
+    _s_index=0
     while [ $# -ge 2 ]; do
         _s_lang="$1"
         _s_text="$2"
+        case "$_s_lang" in
+        ""|*[!A-Za-z0-9_-]*|[0-9]*) rm -rf "$_s_tmp"; return 2 ;;
+        esac
+        printf %s "$_s_lang" >"$_s_tmp/$((_s_index)).lang"
+        printf %s "$_s_text" >"$_s_tmp/$((_s_index)).text"
+        _s_index=$((_s_index + 1))
         shift 2
-        # 处理语言代码中的特殊字符 (如 zh-CN -> zh_CN)
-        _s_safe_lang=$(printf '%s' "$_s_lang" | tr '-' '_')
-        _s_var_name="_I18N_${_s_key}_${_s_safe_lang}"
-        # 直接导出变量，允许包含换行符
-        export "$_s_var_name"="$_s_text"
     done
-    unset _s_key _s_lang _s_text _s_safe_lang _s_var_name
+    _s_index=0
+    while [ -f "$_s_tmp/$((_s_index)).lang" ]; do
+        _s_lang=$(cat "$_s_tmp/$((_s_index)).lang")
+        _s_text=$(cat "$_s_tmp/$((_s_index)).text")
+        _s_safe_lang=$(printf %s "$_s_lang" | tr - _ )
+        _s_var_name="_I18N_${_s_key}_${_s_safe_lang}"
+        export "$_s_var_name=$_s_text"
+        _s_index=$((_s_index + 1))
+    done
+    rm -rf "$_s_tmp"
+    unset _s_key _s_lang _s_text _s_safe_lang _s_var_name _s_tmp _s_index
 }
-# 获取并打印国际化文本
-# 用法: i18n "WELCOME_MSG"
+# èŽ·å–å¹¶æ‰“å°å›½é™…åŒ–æ–‡æœ¬
+# ç”¨æ³•: i18n "WELCOME_MSG"
 i18n() {
     _i1_key="$1"
 
-    # 获取当前语言优先级: KAM_UI_LANGUAGE > KAM_LANG (legacy) > 系统属性 > 默认 en
+    # èŽ·å–å½“å‰è¯­è¨€ä¼˜å…ˆçº§: KAM_UI_LANGUAGE > KAM_LANG (legacy) > ç³»ç»Ÿå±žæ€§ > é»˜è®¤ en
     _i1_lang="${KAM_UI_LANGUAGE:-${KAM_LANG:-$(getprop persist.sys.locale 2>/dev/null | cut -d'-' -f1)}}"
     _i1_lang="${_i1_lang:-en}"
 
-    # 如果使用了 legacy KAM_LANG 并且启用了调试（KAM_DEBUG_I18N=1），则打印弃用提示
+    # å¦‚æžœä½¿ç”¨äº† legacy KAM_LANG å¹¶ä¸”å¯ç”¨äº†è°ƒè¯•ï¼ˆKAM_DEBUG_I18N=1ï¼‰ï¼Œåˆ™æ‰“å°å¼ƒç”¨æç¤º
     if [ -z "${KAM_UI_LANGUAGE:-}" ] && [ -n "${KAM_LANG:-}" ] && [ "${KAM_DEBUG_I18N:-}" = "1" ]; then
         print "Warning: KAM_LANG is deprecated; please use KAM_UI_LANGUAGE"
     fi
@@ -43,20 +60,20 @@ i18n() {
 
     _i1_var_name="_I18N_${_i1_key}_${_i1_lang}"
 
-    # 使用 eval 直接读取变量，以支持多行内容
+    # ä½¿ç”¨ eval ç›´æŽ¥è¯»å–å˜é‡ï¼Œä»¥æ”¯æŒå¤šè¡Œå†…å®¹
     eval "_i1_text=\$${_i1_var_name}"
 
-    # 自动回退机制：如果目标语言为空且不是英文，尝试读取英文
+    # è‡ªåŠ¨å›žé€€æœºåˆ¶ï¼šå¦‚æžœç›®æ ‡è¯­è¨€ä¸ºç©ºä¸”ä¸æ˜¯è‹±æ–‡ï¼Œå°è¯•è¯»å–è‹±æ–‡
     if [ -z "$_i1_text" ] && [ "$_i1_lang" != "en" ]; then
         _i1_var_name="_I18N_${_i1_key}_en"
         eval "_i1_text=\$${_i1_var_name}"
     fi
 
-    # 如果依然为空，则返回 Key 名本身
+    # å¦‚æžœä¾ç„¶ä¸ºç©ºï¼Œåˆ™è¿”å›ž Key åæœ¬èº«
     if [ -z "$_i1_text" ]; then
         print "$_i1_key"
     else
-        # 展开转义序列（如 \n）再使用 print 输出，保持输出函数一致性
+        # å±•å¼€è½¬ä¹‰åºåˆ—ï¼ˆå¦‚ \nï¼‰å†ä½¿ç”¨ print è¾“å‡ºï¼Œä¿æŒè¾“å‡ºå‡½æ•°ä¸€è‡´æ€§
         _i1_out=$(printf '%b' "$_i1_text")
         print "$_i1_out"
     fi
@@ -64,7 +81,7 @@ i18n() {
     unset _i1_key _i1_lang _i1_var_name _i1_text
 }
 
-# 从文件加载 I18N 数据
+# ä»Žæ–‡ä»¶åŠ è½½ I18N æ•°æ®
 load_i18n() {
     _lic_file="$1"
     [ -f "$_lic_file" ] || return 1
@@ -75,7 +92,7 @@ load_i18n() {
         \#* | "") continue ;;
         esac
 
-        # 解析表头 KEY|zh|en...
+        # è§£æžè¡¨å¤´ KEY|zh|en...
         if [ -z "$_lic_langs" ]; then
             case "$_lic_line" in
             KEY\|*)
@@ -101,7 +118,7 @@ load_i18n() {
     unset _lic_file _lic_line _lic_hdr _lic_langs _lic_key _lic_val _field_idx _lic_lang
 }
 
-# 导出当前 I18N 数据到文件
+# å¯¼å‡ºå½“å‰ I18N æ•°æ®åˆ°æ–‡ä»¶
 dump_i18n() {
     _dic_file="$1"
     [ -n "$_dic_file" ] || return 1
@@ -109,7 +126,7 @@ dump_i18n() {
     _dic_langs=$(env | grep '^_I18N_' | sed -n 's/^_I18N_.*_\([^=]*\)=.*/\1/p' | sort -u)
     [ -z "$_dic_langs" ] && _dic_langs="zh en ja ko"
 
-    # 打印表头
+    # æ‰“å°è¡¨å¤´
     _hdr="KEY"
     for _lang in $_dic_langs; do _hdr="${_hdr}|${_lang}"; done
     printf '%s\n' "$_hdr" >"$_dic_file"
@@ -121,7 +138,7 @@ dump_i18n() {
         for _lang in $_dic_langs; do
             _var="_I18N_${_dic_k}_${_lang}"
             eval "_val=\$${_var}"
-            # 导出时将真实换行符转义为 \n 字符串以便单行存储
+            # å¯¼å‡ºæ—¶å°†çœŸå®žæ¢è¡Œç¬¦è½¬ä¹‰ä¸º \n å­—ç¬¦ä¸²ä»¥ä¾¿å•è¡Œå­˜å‚¨
             _val=$(printf '%s' "$_val" | sed ':a;N;$!ba;s/\n/\\n/g')
             _out="${_out}|${_val}"
         done
