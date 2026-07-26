@@ -189,7 +189,10 @@ watchdog_start() {
 	_wd_pid_file="$(watchdog_pid_file "$_wd_start_name")" || return 1
 	_wd_log_file="${KAM_WATCHDOG_LOG_FILE:-${KAM_HOME:-$MODDIR}/.log/watchdog.log}"
 	_wd_script_file="${_wd_pid_file%.pid}.loop.sh"
-	pkill -f "$_wd_script_file" 2>/dev/null || true
+	# The loop is launched as `sh <script>`, so a stale one is identified by its
+	# exact argv rather than by a `pkill -f` substring that would also match any
+	# unrelated process merely mentioning this path.
+	kam_stop_pids_by_argv '' "$_wd_script_file" >/dev/null 2>&1 || true
 	mkdir -p "${_wd_log_file%/*}" 2>/dev/null || true
 	{
 		printf '%s\n' '#!/system/bin/sh'

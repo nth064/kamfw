@@ -114,6 +114,127 @@ wait_key_any() {
     wait_key "any"
 }
 
+# =============================================================================
+# 进程精确识别 / exact process identity
+# =============================================================================
+# `pkill -f` 把模式匹配到整机每一条 cmdline 上；模块以 root 运行，一次误配就会
+# 向陌生进程发信号。下面的函数改为逐字段比较完整 argv，只有参数向量完全吻合的
+# 进程才会被处理。
+#
+# `read -d` is a bash/ksh extension that Android's ash lacks, so the result is
+# probed once and cached. Callers may preset _kam_read_d_supported to exercise
+# either path.
+kam_read_d_supported() {
+    if [ -z "${_kam_read_d_supported:-}" ]; then
+        if { printf 'x\0' | { IFS= read -r -d '' _kam_probe_arg 2>/dev/null &&
+            [ "$_kam_probe_arg" = x ]; }; }; then
+            _kam_read_d_supported=1
+        else
+            _kam_read_d_supported=0
+        fi
+        unset _kam_probe_arg
+    fi
+    [ "$_kam_read_d_supported" = 1 ]
+}
+
+# kam_pid_argv_matches <pid> <expected-argv0> [<expected-argv1> ...]
+#
+# True only when the process argv has exactly as many fields as expected values
+# and every field is identical. An empty expected value matches any field, for
+# the positions we do not control (argv0 is the interpreter the kernel picked:
+# `sh`, `/system/bin/sh` and `busybox sh` are all legitimate).
+kam_pid_argv_matches() {
+    _kam_argv_pid="$1"
+    shift || return 1
+    [ "$#" -gt 0 ] || return 1
+    case "$_kam_argv_pid" in
+    "" | *[!0-9]*) return 1 ;;
+    esac
+    _kam_argv_file="/proc/${_kam_argv_pid}/cmdline"
+    [ -r "$_kam_argv_file" ] || return 1
+
+    _kam_argv_rc=0
+    if kam_read_d_supported; then
+        while IFS= read -r -d '' _kam_argv_field; do
+            if [ "$#" -eq 0 ]; then
+                _kam_argv_rc=1
+                continue
+            fi
+            if [ -n "$1" ] && [ "$1" != "$_kam_argv_field" ]; then
+                _kam_argv_rc=1
+            fi
+            shift
+        done <"$_kam_argv_file"
+    else
+        # One `tr` converts the NUL separated argv. The sentinel preserves a
+        # trailing empty field that command substitution would otherwise strip,
+        # so an explicitly empty last argument is still counted.
+        _kam_argv_dump="$( {
+            tr '\0' '\n' <"$_kam_argv_file"
+            printf 'x'
+        } )"
+        # Each line is compared only once the next one has been read, so the
+        # sentinel is left pending at EOF and never treated as an argument.
+        _kam_argv_pending=0
+        _kam_argv_prev=""
+        while IFS= read -r _kam_argv_field; do
+            if [ "$_kam_argv_pending" = 1 ]; then
+                if [ "$#" -eq 0 ]; then
+                    _kam_argv_rc=1
+                elif [ -n "$1" ] && [ "$1" != "$_kam_argv_prev" ]; then
+                    _kam_argv_rc=1
+                    shift
+                else
+                    shift
+                fi
+            fi
+            _kam_argv_prev="$_kam_argv_field"
+            _kam_argv_pending=1
+        done <<EOF
+$_kam_argv_dump
+EOF
+    fi
+    # Expected values left over mean the process had fewer arguments.
+    [ "$#" -eq 0 ] || _kam_argv_rc=1
+
+    unset _kam_argv_pid _kam_argv_file _kam_argv_field _kam_argv_dump
+    unset _kam_argv_pending _kam_argv_prev
+    return "$_kam_argv_rc"
+}
+
+# kam_stop_pids_by_argv <expected-argv0> [<expected-argv1> ...]
+#
+# Terminate every process whose argv matches exactly, then escalate to SIGKILL
+# for the ones that ignored SIGTERM. Prints how many were signalled.
+kam_stop_pids_by_argv() {
+    [ "$#" -gt 0 ] || return 1
+    _kam_stop_pids=""
+    _kam_stop_count=0
+    for _kam_stop_entry in /proc/[0-9]*; do
+        _kam_stop_pid="${_kam_stop_entry#/proc/}"
+        case "$_kam_stop_pid" in
+        "" | *[!0-9]*) continue ;;
+        esac
+        [ "$_kam_stop_pid" = "$$" ] && continue
+        kam_pid_argv_matches "$_kam_stop_pid" "$@" || continue
+        kill "$_kam_stop_pid" 2>/dev/null || true
+        _kam_stop_pids="$_kam_stop_pids $_kam_stop_pid"
+        _kam_stop_count=$((_kam_stop_count + 1))
+    done
+    if [ -n "$_kam_stop_pids" ]; then
+        sleep 1
+        for _kam_stop_pid in $_kam_stop_pids; do
+            kill -0 "$_kam_stop_pid" 2>/dev/null || continue
+            # The pid could have been recycled during the grace period, and
+            # SIGKILL on a stranger cannot be taken back. Re-verify identity.
+            kam_pid_argv_matches "$_kam_stop_pid" "$@" || continue
+            kill -9 "$_kam_stop_pid" 2>/dev/null || true
+        done
+    fi
+    print "$_kam_stop_count"
+    unset _kam_stop_pids _kam_stop_count _kam_stop_entry _kam_stop_pid
+}
+
 # 其他分支暂不计入
 # 如有必要欢迎提交PR补全！
 get_manager() {
