@@ -8,10 +8,16 @@
 set_i18n() {
     _s_key="$1"
     shift
+    case "$_s_key" in
+    ""|*[!A-Za-z0-9_]*|[0-9]*) return 2 ;;
+    esac
     while [ $# -ge 2 ]; do
         _s_lang="$1"
         _s_text="$2"
         shift 2
+        case "$_s_lang" in
+        ""|*[!A-Za-z0-9_-]*|[0-9_]*) return 2 ;;
+        esac
         # 处理语言代码中的特殊字符 (如 zh-CN -> zh_CN)
         _s_safe_lang=$(printf '%s' "$_s_lang" | tr '-' '_')
         _s_var_name="_I18N_${_s_key}_${_s_safe_lang}"
