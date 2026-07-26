@@ -42,7 +42,9 @@ load_i18n() {
         if [ "$_lic_seen" -eq 0 ]; then
             case "$_lic_line" in KEY\|*)
                 _lic_hdr=${_lic_line#KEY|}; case "$_lic_hdr" in *\|\|*|\|*|*\|) return 1;; esac
-                _lic_langs=$(printf '%s' "$_lic_hdr" | tr '|' ' '); _lic_expected=$(printf '%s' "$_lic_line" | awk -F'|' '{print NF}'); _lic_seen=1; continue;; esac
+                _lic_langs=$(printf '%s' "$_lic_hdr" | tr '|' ' '); _lic_expected=$(printf '%s' "$_lic_line" | awk -F'|' '{print NF}');
+                for _lic_lang in $_lic_langs; do case "$_lic_lang" in ""|*[!A-Za-z0-9_-]*|[0-9_]*) return 1;; esac; done
+                _lic_seen=1; continue;; esac
             _lic_seen=1
         fi
         _lic_fields=$(printf '%s' "$_lic_line" | awk -F'|' '{print NF}'); [ "$_lic_fields" -eq "$_lic_expected" ] || return 1
