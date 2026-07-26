@@ -11,20 +11,26 @@ set_i18n() {
     case "$_s_key" in
     ""|*[!A-Za-z0-9_]*|[0-9]*) return 2 ;;
     esac
+    _s_committed=""
     while [ $# -ge 2 ]; do
         _s_lang="$1"
         _s_text="$2"
         shift 2
         case "$_s_lang" in
-        ""|*[!A-Za-z0-9_-]*|[0-9_]*) return 2 ;;
+        ""|*[!A-Za-z0-9_-]*|[0-9_]*)
+            for _s_var_name in $_s_committed; do unset "$_s_var_name"; done
+            unset _s_committed
+            return 2
+            ;;
         esac
         # 处理语言代码中的特殊字符 (如 zh-CN -> zh_CN)
         _s_safe_lang=$(printf '%s' "$_s_lang" | tr '-' '_')
         _s_var_name="_I18N_${_s_key}_${_s_safe_lang}"
         # 直接导出变量，允许包含换行符
         export "$_s_var_name"="$_s_text"
+        _s_committed="$_s_committed $_s_var_name"
     done
-    unset _s_key _s_lang _s_text _s_safe_lang _s_var_name
+    unset _s_key _s_lang _s_text _s_safe_lang _s_var_name _s_committed
 }
 # 获取并打印国际化文本
 # 用法: i18n "WELCOME_MSG"
@@ -86,6 +92,7 @@ load_i18n() {
             case "$_lic_line" in
             KEY\|*)
                 _lic_hdr="${_lic_line#KEY|}"
+                case "$_lic_hdr" in *"="*) return 1 ;; esac
                 _lic_langs=$(printf '%s' "$_lic_hdr" | tr '|' ' ')
                 continue
                 ;;
