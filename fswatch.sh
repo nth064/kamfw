@@ -108,6 +108,98 @@ fswatch_is_pid_alive() {
 	kill -0 "$_fw_pid" 2>/dev/null
 }
 
+# `read -d` is a bash/ksh extension. Android's ash does not have it, so the
+# result is probed once and cached; callers may preset _fw_read_d_supported to
+# exercise either path.
+fswatch_read_d_supported() {
+	if [ -z "${_fw_read_d_supported:-}" ]; then
+		if { printf 'x\0' | { IFS= read -r -d '' _fw_probe_arg 2>/dev/null &&
+			[ "$_fw_probe_arg" = x ]; }; }; then
+			_fw_read_d_supported=1
+		else
+			_fw_read_d_supported=0
+		fi
+		unset _fw_probe_arg
+	fi
+	[ "$_fw_read_d_supported" = 1 ]
+}
+
+# A recorded pid is only proof of a live process, not of the right one: after
+# the loop dies the kernel can hand that pid to something unrelated, and acting
+# on it would signal a stranger. Confirm the process is exactly `<shell>
+# <script>` with no further argument.
+fswatch_pid_matches_script() {
+	_fw_match_pid="$1"
+	_fw_match_script="$2"
+	[ -n "$_fw_match_script" ] || return 1
+	case "$_fw_match_pid" in
+		"" | *[!0-9]*) return 1 ;;
+	esac
+	_fw_match_cmdline="/proc/${_fw_match_pid}/cmdline"
+	[ -r "$_fw_match_cmdline" ] || return 1
+
+	_fw_match_count=0
+	_fw_match_second=""
+	if fswatch_read_d_supported; then
+		while IFS= read -r -d '' _fw_match_arg; do
+			_fw_match_count=$((_fw_match_count + 1))
+			[ "$_fw_match_count" -eq 2 ] && _fw_match_second="$_fw_match_arg"
+		done <"$_fw_match_cmdline"
+	else
+		# One tr call converts the NUL separated argv. The sentinel preserves a
+		# trailing empty field that command substitution would otherwise strip,
+		# so an explicitly empty argv2 is still counted as an argument.
+		_fw_match_dump="$( {
+			tr '\0' '\n' <"$_fw_match_cmdline"
+			printf 'x'
+		} )"
+		while IFS= read -r _fw_match_arg; do
+			_fw_match_count=$((_fw_match_count + 1))
+			[ "$_fw_match_count" -eq 2 ] && _fw_match_second="$_fw_match_arg"
+		done <<EOF
+$_fw_match_dump
+EOF
+		_fw_match_count=$((_fw_match_count - 1))
+	fi
+
+	if [ "$_fw_match_count" -eq 2 ] && [ "$_fw_match_second" = "$_fw_match_script" ]; then
+		_fw_match_rc=0
+	else
+		_fw_match_rc=1
+	fi
+	unset _fw_match_pid _fw_match_script _fw_match_cmdline _fw_match_count
+	unset _fw_match_second _fw_match_arg _fw_match_dump
+	return "$_fw_match_rc"
+}
+
+# Stop every process that is exactly this loop script, for the cases where the
+# pid file is missing or stale. /proc is walked directly so no pid list has to
+# be shelled out for, and each candidate is verified before it is signalled.
+fswatch_stop_script_processes() {
+	_fw_scan_script="$1"
+	[ -n "$_fw_scan_script" ] || return 1
+	_fw_scan_stopped=0
+	for _fw_scan_entry in /proc/[0-9]*; do
+		_fw_scan_pid="${_fw_scan_entry#/proc/}"
+		case "$_fw_scan_pid" in
+			"" | *[!0-9]*) continue ;;
+		esac
+		[ "$_fw_scan_pid" = "$$" ] && continue
+		fswatch_pid_matches_script "$_fw_scan_pid" "$_fw_scan_script" || continue
+		kill "$_fw_scan_pid" 2>/dev/null || true
+		_fw_scan_wait=0
+		while [ "$_fw_scan_wait" -lt 50 ] && fswatch_is_pid_alive "$_fw_scan_pid"; do
+			_fw_scan_wait=$((_fw_scan_wait + 1))
+		done
+		if fswatch_is_pid_alive "$_fw_scan_pid"; then
+			kill -9 "$_fw_scan_pid" 2>/dev/null || true
+		fi
+		_fw_scan_stopped=$((_fw_scan_stopped + 1))
+	done
+	print "$_fw_scan_stopped"
+	unset _fw_scan_script _fw_scan_entry _fw_scan_pid _fw_scan_wait _fw_scan_stopped
+}
+
 fswatch_require_tools() {
 	for _fw_tool in find cksum sort; do
 		if ! command -v "$_fw_tool" >/dev/null 2>&1; then
