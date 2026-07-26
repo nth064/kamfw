@@ -215,7 +215,12 @@ kam_stop_pids_by_argv() {
         case "$_kam_stop_pid" in
         "" | *[!0-9]*) continue ;;
         esac
-        [ "$_kam_stop_pid" = "$$" ] && continue
+        # Written as an `if` rather than `[ ... ] && continue`: the latter makes
+        # the loop body return non-zero for every pid that is not this one,
+        # which aborts the caller under `set -e`.
+        if [ "$_kam_stop_pid" = "$$" ]; then
+            continue
+        fi
         kam_pid_argv_matches "$_kam_stop_pid" "$@" || continue
         kill "$_kam_stop_pid" 2>/dev/null || true
         _kam_stop_pids="$_kam_stop_pids $_kam_stop_pid"
